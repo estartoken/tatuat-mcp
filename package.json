@@ -1,0 +1,30 @@
+{
+  "name": "tatuat-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Server MCP public pentru TATUAT.RO (plugin ChatGPT) — catalog read-only + link de checkout semnat",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test 'src/mcp/*.test.mjs' 'src/mcp/tools/*.test.mjs' 'src/well-known/*.test.mjs'",
+    "test:critical": "npm run test && npm run typecheck"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "2.0.0",
+    "next": "16.3.4",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.2.0",
+    "typescript": "^5.7.0"
+  }
+}

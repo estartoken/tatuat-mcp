@@ -1,0 +1,17 @@
+node_modules/
+.next/
+out/
+build/
+.vercel/
+*.tsbuildinfo
+next-env.d.ts
+
+# Secrete — valorile vin din Keychain / env-ul Vercel, niciodată din repo
+.env
+.env.*
+!.env.example
+
+.DS_Store
+npm-debug.log*
+.vercel
+.env*
