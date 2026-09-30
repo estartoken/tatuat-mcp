@@ -210,6 +210,24 @@ export function createHandler(deps = {}) {
       //
       // `isAllowedProductId` e pur și sincron ⇒ nu cere `fetchImpl` în `Deps` și
       // nu face nicio cerere de rețea pe drumul acestui tool.
+
+      // ⚠️ CE NU SE APLICĂ AICI: restricția „doar Ungaria". `order_restriction`
+      // (vezi `policy.mjs`) se citește din `products.lang`, adică din catalog —
+      // și acest tool, prin construcție, nu citește catalogul. Deci un link
+      // semnat POATE conține un produs `lang='hu'`. NU e o omisiune:
+      //
+      //   1. regula reală a serverului (`place_order` → `product_hu_only`, oglindită
+      //      în `CheckoutForm.tsx`) blochează pe `lang='hu'` DOAR când
+      //      `country !== 'HU'`. Un client maghiar cu livrare în Ungaria are
+      //      dreptul la produs, deci un refuz necondiționat aici ar fi GREȘIT;
+      //   2. țara de livrare nu există în acest tool — se alege pe site, în
+      //      formularul de checkout. Locul unde restricția se poate evalua corect
+      //      e pagina `/cos-din-conversatie` din `tatuat-site`, care o știe.
+      //
+      // Prin urmare: aici NU blocăm, iar `get_stock`/`get_product`/`calculate_shipping`
+      // o DECLARĂ, ca modelul să spună clientului înainte să ceară linkul. Dacă
+      // adaugi vreodată un gard pe `lang` în acest tool, citește întâi condiția
+      // de țară — altfel refuzi comenzi pe care serverul le acceptă.
       const blocked = args.items.filter((item) => !isAllowedProductId(item.product_id))
       if (blocked.length > 0) {
         const ids = [...new Set(blocked.map((item) => item.product_id))].join(", ")
