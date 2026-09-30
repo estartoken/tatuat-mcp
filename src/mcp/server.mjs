@@ -42,7 +42,7 @@ export const INSTRUCTIONS = [
   '',
   'Reguli:',
   '- Prețurile sunt în RON și includ TVA. Nu converti în altă monedă și nu inventa un preț: dacă un tool nu a întors un preț, spune că nu îl poți confirma.',
-  '- Catalogul servit aici e cel pentru România. Produsele disponibile exclusiv în Ungaria nu apar deliberat; nu le deduce și nu le promite.',
+  '- Căutarea și listarea folosesc catalogul pentru România. Pe fișele accesate direct, respectă order_restriction: hu_only înseamnă livrare doar în Ungaria; nu promite livrare în România pentru aceste produse.',
   '- Disponibilitatea și stocul se citesc doar din răspunsul tool-urilor. „În stoc" fără confirmare de la un tool e o afirmație pe care nu ai cum să o susții.',
   '- Plata NU se face în conversație. Comanda se finalizează pe tatuat.ro; trimite clientul pe linkul întors de tool-uri.',
   '- Pentru detalii despre un produs anume folosește slug-ul întors de search_products, nu numele reformulat.',

@@ -1,13 +1,7 @@
 /**
  * `GET /.well-known/mcp-server-card.json` — documentul static „server card" cerut
  * de intrarea ARD a serverului: `tatuat-site/public/.well-known/ard.json`,
- * entry `urn:air:tatuat.ro:mcp:catalog`, câmp `url`.
- *
- * ⚠️ Referința aceea e ÎNAINTE, nu o stare: măsurat 30.09.2026,
- * `https://tatuat.ro/.well-known/ard.json` întoarce **404** (și pe apex și pe `www`).
- * Fișierul e §3 din handoff și cere un deploy separat pe `tatuat-site`, cu aprobare
- * proprie. Documentul de aici e însă live și corect (verificat pe `api.tatuat.ro`),
- * deci când ARD-ul va fi publicat va avea deja o țintă validă — nu invers.
+ * entry `urn:air:tatuat.ro:mcp:tatuat-mcp`, câmp `url`.
  *
  * 🔴 Descoperit prin verificare directă a schemei oficiale (28.09.2026,
  * `ards-project/ard-spec`, `spec/ard.md` §4.4 + `spec/schemas/ard-entry.schema.json`):
@@ -54,7 +48,7 @@ export function mcpServerCardResponse(env = process.env, version = '0.1.0') {
   const card = {
     name: 'io.github.estartoken/tatuat-mcp',
     description:
-      'MCP server pentru catalogul TATUAT.RO (căutare, stoc, preț, categorii, calcul transport, link de checkout semnat) — RON, doar RO.',
+      'MCP server pentru catalogul TATUAT.RO (căutare, stoc, preț, categorii, calcul transport, link de checkout semnat) — prețuri RON; căutare în catalogul RO, restricții de livrare declarate pe fișele directe.',
     version,
     websiteUrl: 'https://tatuat.ro',
     remotes: [{ type: 'streamable-http', url: `${origin}/mcp` }],
