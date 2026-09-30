@@ -12,8 +12,9 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "test": "node --test 'src/mcp/*.test.mjs' 'src/mcp/tools/*.test.mjs' 'src/well-known/*.test.mjs'",
-    "test:critical": "npm run test && npm run typecheck"
+    "test": "node --test 'src/mcp/*.test.mjs' 'src/mcp/tools/*.test.mjs' 'src/well-known/*.test.mjs' 'src/registry/*.test.mjs'",
+    "test:critical": "npm run test && npm run typecheck",
+    "prepare": "git rev-parse --is-inside-work-tree >/dev/null 2>&1 && git config core.hooksPath .githooks || true"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.0.0",

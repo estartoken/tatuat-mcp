@@ -1,0 +1,26 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.estartoken/tatuat-mcp",
+  "title": "TATUAT.RO — Tattoo & Piercing Supplies",
+  "description": "Tattoo and piercing supply catalog (Romania): search, live stock, shipping cost, checkout link.",
+  "version": "0.1.0",
+  "websiteUrl": "https://tatuat.ro",
+  "repository": {
+    "url": "https://github.com/estartoken/tatuat-mcp",
+    "source": "github",
+    "id": "1398388993"
+  },
+  "icons": [
+    {
+      "src": "https://tatuat.ro/icon.png",
+      "mimeType": "image/png",
+      "sizes": ["256x256"]
+    }
+  ],
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://api.tatuat.ro/mcp"
+    }
+  ]
+}
