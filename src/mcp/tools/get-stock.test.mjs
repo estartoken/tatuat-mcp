@@ -323,3 +323,47 @@ test('fiecare câmp de input și de output are descriere pentru model', () => {
     assert.ok(field.description, `outputSchema.${key} nu are .describe()`)
   }
 })
+
+// ---------------------------------------------------------------------------
+// Produsul „doar Ungaria" (incidentul din 19.09, reparat 01.10.2026).
+//
+// Produsul NU se ascunde — „ascuns dar cumpărabil" e intenția ownerului și fișa
+// de produs e accesibilă pe link direct în magazin. Se repară TĂCEREA: până acum
+// răspunsul spunea „are stoc suficient" ca despre oricare altul, iar clientul
+// afla abia la `place_order` (`product_hu_only`) că nu poate comanda — refuz pe
+// care l-a citit ca „server picat".
+// ---------------------------------------------------------------------------
+
+/** Produsul real care a produs incidentul: `lang='hu'`, în stoc. */
+const HU_ONLY_PRODUCT = { ...SIMPLE_PRODUCT, id: 90000001, slug: 'produs-sintetic-doar-hu', lang: 'hu' }
+
+test('produs lang="hu": răspunsul declară restricția, în text ȘI în date', async () => {
+  const { result } = await run({ slug: 'produs-sintetic-doar-hu', qty: 1 }, { product: [HU_ONLY_PRODUCT] })
+  const out = structured(result)
+  assert.equal(out.order_restriction, 'hu_only')
+  const text = result.content.map((c) => c.text).join(' ')
+  assert.ok(/Ungaria/.test(text), 'textul nu spune clientului că produsul e doar pentru Ungaria')
+  // Stocul rămâne raportat corect: restricția e o informație ÎN PLUS, nu un refuz.
+  assert.equal(out.state, 'in_stock')
+  assert.equal(out.available_now, 1)
+})
+
+test('CONTROL NEGATIV: produsul RO nu primește avertismentul', async () => {
+  // Fără el, un handler care ar lipi nota pe ORICE răspuns ar trece testul de sus.
+  const { result } = await run({ slug: 'tus-negru-30ml', qty: 1 }, { product: [{ ...SIMPLE_PRODUCT, lang: null }] })
+  const out = structured(result)
+  assert.equal(out.order_restriction, null)
+  assert.ok(!/Ungaria/.test(result.content.map((c) => c.text).join(' ')))
+})
+
+test('restricția se citește de pe PRODUS, nu de pe variantă', async () => {
+  // `lang` e o coloană de produs. Un handler care ar căuta-o pe variantă ar ieși
+  // `null` pentru toate produsele cu variante — adică exact pentru un pachet promo.
+  const { result } = await run(
+    { slug: 'produs-sintetic-doar-hu', variant_id: 11, qty: 2 },
+    { product: [{ ...HU_ONLY_PRODUCT, variant_count: 2 }], variants: VARIANTS },
+  )
+  const out = structured(result)
+  assert.equal(out.order_restriction, 'hu_only')
+  assert.equal(out.variant_id, 11, 'varianta cerută nu a fost aleasă')
+})

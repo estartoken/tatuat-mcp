@@ -297,3 +297,30 @@ test('fiecare câmp de input și de output are descriere pentru model', () => {
     assert.ok(field.description, `outputSchema.${key} nu are .describe()`)
   }
 })
+
+// ---------------------------------------------------------------------------
+// Restricția „doar Ungaria" pe fișa de produs (01.10.2026). Vezi policy.mjs
+// pentru DE CE se anunță în loc să se ascundă.
+// ---------------------------------------------------------------------------
+
+test('fișa unui produs lang="hu" declară restricția, fără să ascundă produsul', async () => {
+  const { result } = await run({ slug: 'produs-sintetic-doar-hu' }, { detail: [{ ...DETAIL_ROW, lang: 'hu' }] })
+  const out = structured(result)
+  assert.equal(out.found, true, 'produsul nu trebuie ascuns — e cumpărabil din Ungaria')
+  assert.equal(out.order_restriction, 'hu_only')
+  assert.ok(/Ungaria/.test(result.content.map((c) => c.text).join(' ')))
+})
+
+test('CONTROL NEGATIV: fișa unui produs RO nu declară nicio restricție', async () => {
+  const { result } = await run({ slug: DETAIL_ROW.slug }, { detail: [{ ...DETAIL_ROW, lang: null }] })
+  const out = structured(result)
+  assert.equal(out.order_restriction, null)
+  assert.ok(!/Ungaria/.test(result.content.map((c) => c.text).join(' ')))
+})
+
+test('slug inexistent: order_restriction e null, nu absent — outputSchema o cere', async () => {
+  const { result } = await run({ slug: 'nu-exista' }, { detail: [] })
+  const out = structured(result)
+  assert.equal(out.found, false)
+  assert.equal(out.order_restriction, null)
+})

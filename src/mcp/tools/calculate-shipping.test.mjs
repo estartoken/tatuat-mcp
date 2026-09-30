@@ -531,3 +531,59 @@ test('interogarea cere efectiv variantele — altfel fixul n-ar avea de unde șt
   assert.match(url, /shipping_override/, 'coloanele vechi rămân — taxa de colet greu nu se pierde')
   assert.equal(calls.length, 1, 'o singură cerere de rețea, nu una în plus pentru variante')
 })
+
+// ---------------------------------------------------------------------------
+// Restricția „doar Ungaria" pe coș (01.10.2026).
+//
+// Transportul rămâne calculat corect — cifra nu se falsifică. Ce se adaugă e
+// avertismentul că un coș cu acel produs va fi refuzat la plasare pentru o
+// livrare în România, ca agentul să nu ducă clientul până la formular.
+// ---------------------------------------------------------------------------
+
+/** Rândul real: produsul `lang='hu'`, 50 RON (măsurat live 01.10.2026). */
+const HU_ROW = { id: 90000001, slug: 'produs-sintetic-doar-hu', price: 50, sale_price: null, shipping_override: null, weight_g: null, lang: 'hu' }
+const RO_ROW = { id: 101, slug: 'tus-negru-30ml', price: 17, sale_price: null, shipping_override: null, weight_g: null, lang: null }
+
+test('linie cu produs lang="hu": coșul declară restricția, iar subtotalul rămâne real', async () => {
+  const { result } = await run({ lines: [{ slug: 'produs-sintetic-doar-hu', quantity: 3 }] }, { rows: [HU_ROW] })
+  const out = structured(result)
+  assert.equal(out.order_restriction, 'hu_only')
+  assert.equal(out.subtotal, 150, '3 × 50 RON — cifra nu se schimbă, doar se adaugă avertismentul')
+  assert.ok(/Ungaria/.test(result.content.map((c) => c.text).join(' ')))
+})
+
+test('CONTROL NEGATIV: coș numai cu produse RO → nicio restricție', async () => {
+  const { result } = await run({ lines: [{ slug: 'tus-negru-30ml', quantity: 1 }] }, { rows: [RO_ROW] })
+  const out = structured(result)
+  assert.equal(out.order_restriction, null)
+  assert.equal(out.subtotal, 17)
+  assert.ok(!/Ungaria/.test(result.content.map((c) => c.text).join(' ')))
+})
+
+test('un singur produs restricționat într-un coș mixt e destul', async () => {
+  const { result } = await run(
+    { lines: [{ slug: 'tus-negru-30ml', quantity: 1 }, { slug: 'produs-sintetic-doar-hu', quantity: 1 }] },
+    { rows: [RO_ROW, HU_ROW] },
+  )
+  const out = structured(result)
+  assert.equal(out.order_restriction, 'hu_only')
+  assert.equal(out.subtotal, 67, '17 + 50 — ambele linii contribuie')
+})
+
+test('linie NEREZOLVATĂ nu pune avertismentul pe un coș în care produsul n-a intrat', async () => {
+  // Discriminantul care deosebește „citit din `rows`" de „citit din linia care a
+  // CONTRIBUIT": catalogul întoarce produsul HU, dar linia cerută e alt slug, deci
+  // produsul nu ajunge în coș — nici subtotal, nici avertisment.
+  const { result } = await run({ lines: [{ slug: 'alt-slug-nepotrivit', quantity: 1 }] }, { rows: [HU_ROW] })
+  const out = structured(result)
+  assert.equal(out.subtotal, 0, 'linia nerezolvată nu contribuie')
+  assert.equal(out.order_restriction, null, 'avertisment pe un produs care nu e în coș')
+})
+
+test('ramura cu `subtotal` dat de apelant: restricția e null, nu inventată', async () => {
+  // Fără linii, tool-ul nu știe ce produse sunt în coș. `null` = „nu am ce declara",
+  // și nu se face nicio cerere de rețea din care s-ar putea ghici.
+  const { result, calls } = await run({ subtotal: 50 }, { rows: [HU_ROW] })
+  assert.equal(calls.length, 0, 'ramura cu subtotal nu are voie să interogheze catalogul')
+  assert.equal(structured(result).order_restriction, null)
+})

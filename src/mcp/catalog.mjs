@@ -6,7 +6,7 @@
  * OMITEREA lui e fail-closed: serverul întoarce doar produsele cu `lang is null`,
  * adică RO. Comportamentul e verificat pgTAP în magazin (`lib/catalog-extra.ts`,
  * `lib/queries.ts`, owner 19.09). Faza 1 a pluginului e RO-only, deci `p_lang` nu
- * se trimite NICIODATĂ de aici — produsul FROST doar-Ungaria nu apare în LISTE.
+ * se trimite NICIODATĂ de aici — produsele doar-Ungaria nu apar în LISTE.
  *
  * ⚠️ CORECTAT 30.09.2026, măsurat pe producție: fraza de mai sus spunea „nu apare în
  * ChatGPT", ceea ce e FALS și promitea o garanție pe care canalul nu o are. Gate-ul
@@ -21,7 +21,20 @@
  * ⇒ Un agent putea parcurge tot drumul, iar comanda murea abia la `place_order` cu
  * `product_hu_only`. Un refuz care apare doar la final, fără ca nimic de pe drum să-l
  * fi anunțat, nu se citește ca regulă de business — se citește ca defecțiune.
- * CE se face cu asta e decizia ownerului (vezi nota din `policy.mjs`).
+ *
+ * ✅ REPARAT 01.10.2026, dar nu prin ascundere: `orderRestrictionForRow` (policy.mjs) e
+ * cablat în `get_product`, `get_stock` și `calculate_shipping`, care întorc acum
+ * `order_restriction: 'hu_only'` și o spun ÎN TEXT. Produsul rămâne vizibil pe link
+ * direct — „ascuns dar cumpărabil" e intenția ownerului — se repară TĂCEREA de pe drum.
+ * Criteriul e `lang`, măsurat din regula serverului (`place_order` → `product_hu_only`,
+ * oglindit în `CheckoutForm.tsx` cu `.eq('lang','hu')`), NU `hidden_from_catalog`.
+ * De asta `lang` e în cele două liste de `select` de mai jos, cu gate structural în
+ * `policy.test.mjs`.
+ *
+ * ℹ️ LIMITA acestui strat: `create_checkout` tot nu poate ști (zero rețea, by design),
+ * iar `/api/agent-cart` din tatuat-site NU re-aplică politica — deliberat, vezi
+ * comentariul din ruta lui. Declarația de aici acoperă drumul prin tool-urile de
+ * catalog; celelalte suprafețe ale magazinului se tratează în repo-ul lor.
  *
  * ⚠️ Tipurile generate ale magazinului (`lib/database.types.ts`) NU arată `p_lang`.
  * Sunt stale — o altă sesiune le regenerează. Sursa de adevăr folosită aici e codul
@@ -43,8 +56,14 @@ export const CARD_SELECT =
   'id,slug,name,price,sale_price,on_sale,from_price,from_price_was,from_price_max,in_stock,stock_qty,primary_image,variant_count,brand_id'
 
 /** Coloanele fișei de produs. */
+/**
+ * 🔑 `lang` e în listă pentru POLITICĂ, nu pentru afișare: `orderRestrictionForRow`
+ * (policy.mjs) decide pe el dacă produsul e „doar Ungaria". Scos din `select`,
+ * funcția ar întoarce `null` pentru TOT — fără eroare, fără test roșu, doar
+ * tăcerea înapoi. `policy.test.mjs` verifică structural că e aici.
+ */
 export const DETAIL_SELECT =
-  'id,slug,name,description,price,sale_price,on_sale,sale_start,sale_end,from_price,from_price_was,from_price_max,in_stock,stock_qty,primary_image,variant_count,brand_id,sku,weight_g,model'
+  'id,slug,name,description,price,sale_price,on_sale,sale_start,sale_end,from_price,from_price_was,from_price_max,in_stock,stock_qty,primary_image,variant_count,brand_id,sku,weight_g,model,lang'
 
 /**
  * Sortările acceptate de `products_in_category`.
@@ -251,7 +270,7 @@ export async function productsForShipping({ slugs, ids }, opts = {}) {
   // ambele într-o singură cerere de rețea.
   const rows = await select(
     'products',
-    `select=id,slug,price,sale_price,shipping_override,weight_g,product_variants(price,sale_price)&or=(${filters.join(',')})&status=is.true&limit=${limit}`,
+    `select=id,slug,price,sale_price,shipping_override,weight_g,lang,product_variants(price,sale_price)&or=(${filters.join(',')})&status=is.true&limit=${limit}`,
     opts,
   )
   return asProductRows(rows).map(withVariantPricing)

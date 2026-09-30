@@ -25,7 +25,13 @@ import {
   isAllowedProduct,
   filterAllowedProducts,
   allowedProductOrNull,
+  HU_ONLY,
+  ORDER_RESTRICTION_NOTICE,
+  orderRestrictionForRow,
 } from './policy.mjs'
+
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 
 import {
   searchProducts,
@@ -293,4 +299,68 @@ test('CABLAJ create_checkout: coș MIXT → refuz întreg, nu link parțial', as
   assert.equal(res.isError, true, 'coșul mixt a produs un link')
   const url = String(res.structuredContent?.url ?? '')
   assert.equal(url, '', 'a fost emis un link parțial, cu linia exclusă omisă tăcut')
+})
+
+// ---------------------------------------------------------------------------
+// Restricția de comandă „doar Ungaria" (01.10.2026).
+//
+// Regula NU e inventată aici: `place_order` respinge cu `product_hu_only`, iar
+// oglinda din client (tatuat-site/components/CheckoutForm.tsx:268) interoghează
+// `products.lang = 'hu'`. Testele de mai jos apără exact acel criteriu — nu
+// `hidden_from_catalog`, care e o decizie de afișare.
+// ---------------------------------------------------------------------------
+
+test('orderRestrictionForRow: lang="hu" → hu_only', () => {
+  assert.equal(orderRestrictionForRow({ id: 90000001, lang: 'hu' }), HU_ONLY)
+})
+
+test('CONTROL NEGATIV: un rând fără restricție NU primește una', () => {
+  // Fără asta, o funcție care ar întoarce `hu_only` pentru tot ar trece testul de sus.
+  assert.equal(orderRestrictionForRow({ id: 501, lang: null }), null, 'lang null = produs RO')
+  assert.equal(orderRestrictionForRow({ id: 501 }), null, 'lang absent din rând')
+  assert.equal(orderRestrictionForRow({ id: 501, lang: 'ro' }), null)
+  // Serverul filtrează `.eq('lang','hu')`, deci o verificare „orice limbă ≠ ro" ar
+  // bloca cazuri pe care serverul le ACCEPTĂ.
+  assert.equal(orderRestrictionForRow({ id: 501, lang: 'en' }), null, 'en nu e restricționat de server')
+})
+
+test('orderRestrictionForRow: normalizează spații și majuscule, dar nu tipul', () => {
+  assert.equal(orderRestrictionForRow({ id: 1, lang: 'HU' }), HU_ONLY)
+  assert.equal(orderRestrictionForRow({ id: 1, lang: ' hu ' }), HU_ONLY)
+  for (const rau of [null, undefined, 42, 'hu', ['hu'], { lang: { toString: () => 'hu' } }]) {
+    assert.equal(orderRestrictionForRow(rau), null, `rând invalid a produs o restricție: ${String(rau)}`)
+  }
+})
+
+test('fiecare cod de restricție are un text pe care un tool îl poate spune clientului', () => {
+  const nota = ORDER_RESTRICTION_NOTICE[HU_ONLY]
+  assert.equal(typeof nota, 'string')
+  assert.ok(nota.length > 30, 'nota e prea scurtă ca să explice ceva clientului')
+  assert.ok(/Ungaria/.test(nota), 'nota nu numește țara')
+})
+
+// ---------------------------------------------------------------------------
+// GATE STRUCTURAL: `lang` trebuie să fie în listele de `select`.
+//
+// De ce nu e de prisos: `orderRestrictionForRow` citește `row.lang`. Scos din
+// `select`, ar întoarce `null` pentru TOT — fără eroare, fără test roșu, exact
+// tăcerea pe care câmpul o repară. Se verifică pe SURSA lui catalog.mjs, fiindcă
+// listele sunt șiruri construite acolo, nu valori observabile din afară.
+// ---------------------------------------------------------------------------
+
+test('DETAIL_SELECT și select-ul de shipping cer `lang` din catalog', () => {
+  const sursa = readFileSync(fileURLToPath(new URL('./catalog.mjs', import.meta.url)), 'utf8')
+
+  const detaliu = sursa.match(/export const DETAIL_SELECT =\s*\n?\s*'([^']+)'/)
+  assert.ok(detaliu, 'nu am găsit DETAIL_SELECT în catalog.mjs')
+  const campuriDetaliu = detaliu[1].split(',')
+  assert.ok(campuriDetaliu.includes('lang'), 'DETAIL_SELECT nu mai cere `lang` → get_product/get_stock ar tăcea')
+
+  const shipping = sursa.match(/select=id,slug,price,sale_price,shipping_override,weight_g,([^&]*)&/)
+  assert.ok(shipping, 'nu am găsit select-ul din productsForShipping')
+  assert.ok(shipping[1].split(',').includes('lang'), 'select-ul de shipping nu mai cere `lang`')
+
+  // CONTROL NEGATIV: verificarea de sus trebuie să PICE pe o listă fără `lang`.
+  // Altfel un `includes` pe șirul întreg ar fi trecut și pe „language" sau „slang".
+  assert.equal('id,slug,name,weight_g'.split(',').includes('lang'), false)
 })

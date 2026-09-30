@@ -23,6 +23,7 @@
 
 import { z } from 'zod'
 import { productsForShipping } from '../catalog.mjs'
+import { HU_ONLY, ORDER_RESTRICTION_NOTICE, orderRestrictionForRow } from '../policy.mjs'
 import { CURRENCY, cardPricing } from '../format.mjs'
 import { READ_ONLY_ANNOTATIONS } from '../schemas.mjs'
 import { okResult, guarded } from '../tool-result.mjs'
@@ -117,6 +118,12 @@ export const outputSchema = z.object({
     .describe('Dacă tariful de mai sus vine din produse "grele" cu transport propriu, nu din tariful standard.'),
   currency: z.literal(CURRENCY).describe('Moneda tuturor sumelor. Întotdeauna RON.'),
   gifts_reached: z.array(z.string()).describe('Numele cadourilor pentru care coșul a atins deja pragul.'),
+  order_restriction: z
+    .enum([HU_ONLY])
+    .nullable()
+    .describe(
+      'Restricția de comandă a coșului, sau null. hu_only = cel puțin un produs din liniile trimise se poate comanda DOAR cu livrare în Ungaria; transportul de mai sus e calculat corect, dar comanda va fi refuzată la plasare pentru livrare în România. Null când s-a trimis doar `subtotal`, fără linii — atunci produsele nu sunt cunoscute aici.',
+    ),
   next_gift: GiftInfo.nullable().describe(
     'Următorul cadou de atins și cât mai e nevoie, sau null dacă toate cadourile au fost atinse.',
   ),
@@ -183,6 +190,17 @@ export function createHandler(deps = {}) {
 
       let subtotal
       let heavyTotal = 0
+      // 🔴 Se umple în BUCLA de linii, pe rândul care a CONTRIBUIT la subtotal — nu pe `rows`
+      // și nici pe liniile din input. `productsForShipping` scoate produsele inexistente sau
+      // excluse de politică, iar o linie nerezolvată sare cu `continue`: dacă restricția s-ar
+      // citi din `rows`, un produs care n-a intrat la socoteală ar putea pune avertismentul pe
+      // un coș în care nu e. Măsurat 01.10.2026: slug inexistent → subtotal 0.00, produsul
+      // `lang='hu'` → 50.00, deci contribuția e chiar dovada prezenței.
+      //
+      // Pe ramura cu `subtotal` dat de apelant rămâne `null`, corect: produsele nu sunt
+      // cunoscute aici, deci tool-ul nu are ce declara.
+      /** @type {typeof HU_ONLY | null} */
+      let restriction = null
 
       if (args.subtotal !== undefined) {
         // Sursa e un subtotal deja cunoscut — niciun apel de rețea, niciun produs greu detectabil.
@@ -211,6 +229,7 @@ export function createHandler(deps = {}) {
           // prețul real vine din variantele îmbricate de `productsForShipping`. Tool-ul nu primește
           // `variant_id`, deci folosim minimul — subestimează subtotalul, deci nu promite niciodată
           // un transport gratuit pe care clientul nu-l primește. Vezi testele din acest fișier.
+          if (restriction === null && orderRestrictionForRow(row) === HU_ONLY) restriction = HU_ONLY
           const { price } = cardPricing(row)
           if (price !== null) subtotal += price * line.quantity
           heavyTotal += heavyFeeFor(row, line.quantity)
@@ -249,6 +268,7 @@ export function createHandler(deps = {}) {
         upcoming
           ? `Următorul cadou: ${upcoming.name}, mai sunt necesari ${upcoming.amount_needed.toFixed(2)} RON.`
           : null,
+        restriction === null ? null : ORDER_RESTRICTION_NOTICE[restriction],
       ]
         .filter((line) => line !== null)
         .join(' ')
@@ -260,6 +280,7 @@ export function createHandler(deps = {}) {
         amount_to_free_shipping: amountToFreeShipping,
         heavy_shipping: heavy,
         currency: CURRENCY,
+        order_restriction: restriction,
         gifts_reached: reached,
         next_gift: upcoming,
       })

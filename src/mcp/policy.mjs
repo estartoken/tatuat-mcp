@@ -94,3 +94,60 @@ export function filterAllowedProducts(rows) {
 export function allowedProductOrNull(row) {
   return row !== null && isAllowedProduct(row) ? row : null
 }
+
+/**
+ * Codul restricției de comandă a produsului „doar Ungaria".
+ *
+ * 🔴 MĂSURAT din regula REALĂ, nu inventată aici: `place_order` respinge cu
+ * `product_hu_only`, iar oglinda lui din client
+ * (tatuat-site/components/CheckoutForm.tsx:268) interoghează exact
+ * `products.lang = 'hu'` și blochează NUMAI când `country !== 'HU'`. Criteriul e
+ * deci `lang`, NU `hidden_from_catalog`: ascunderea din catalog e o decizie de
+ * AFIȘARE, limba e cea care decide eligibilitatea la COMANDĂ. Măsurat
+ * 01.10.2026 în tabelă: azi cele două criterii sunt coextensive (un singur rând
+ * `lang='hu'`, el fiind și singurul ascuns) — alegerea contează la drift viitor,
+ * iar cea corectă e cea care oglindește serverul.
+ */
+export const HU_ONLY = 'hu_only'
+
+/**
+ * Textul pe care un tool îl adaugă la răspuns pentru un produs restricționat.
+ *
+ * Formulat ca în `CheckoutForm` („disponibil doar pentru comenzi din Ungaria"),
+ * ca să nu apară un al doilea vocabular pentru aceeași regulă.
+ */
+export const ORDER_RESTRICTION_NOTICE = {
+  [HU_ONLY]:
+    'ATENȚIE: acest produs este disponibil DOAR pentru comenzi cu livrare în Ungaria. O comandă cu livrare în România va fi refuzată la plasare.',
+}
+
+/**
+ * Restricția de comandă a unui rând de produs, sau `null` dacă n-are niciuna.
+ *
+ * 🔑 De ce se ANUNȚĂ, nu se ascunde: „ascuns dar cumpărabil" e intenția
+ * ownerului (banner geo → fișă accesibilă pe link direct), iar
+ * `get_product`/`get_stock` oglindesc FIȘA, nu listele — listele îl exclud deja
+ * prin gate-ul RO-only din RPC-uri (măsurat 01.10.2026: `search_products` și
+ * `browse_category` pe toate cele 4 categorii ale produsului, 0 apariții cu
+ * control pozitiv). Ce a produs incidentul n-a fost vizibilitatea, ci TĂCEREA:
+ * agentul confirma „are stoc suficient", clientul completa formularul, iar
+ * comanda murea la `place_order` cu un mesaj care arăta ca „server picat".
+ *
+ * ⚠️ Cere `lang` ÎN RÂND. Un rând fără câmpul `lang` nu e „fără restricție", e
+ * un rând despre care politica nu poate decide. De asta listele de `select` din
+ * `catalog.mjs` îl includ, iar `policy.test.mjs` verifică structural includerea —
+ * altfel un `select` scurtat tăcut ar face funcția asta să întoarcă `null`
+ * pentru TOT, adică exact tăcerea pe care o repară.
+ *
+ * ⚠️ Doar `'hu'`, nu „orice limbă ≠ ro": serverul filtrează `.eq('lang','hu')`.
+ * O verificare mai largă ar bloca cazuri pe care serverul le acceptă.
+ *
+ * @param {unknown} row
+ * @returns {typeof HU_ONLY | null}
+ */
+export function orderRestrictionForRow(row) {
+  if (typeof row !== 'object' || row === null || Array.isArray(row)) return null
+  const lang = /** @type {{ lang?: unknown }} */ (row).lang
+  if (typeof lang !== 'string') return null
+  return lang.trim().toLowerCase() === 'hu' ? HU_ONLY : null
+}

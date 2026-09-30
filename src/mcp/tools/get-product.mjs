@@ -19,6 +19,7 @@
 
 import { z } from 'zod'
 import { productBySlug, productVariants, brandNames } from '../catalog.mjs'
+import { HU_ONLY, ORDER_RESTRICTION_NOTICE, orderRestrictionForRow } from '../policy.mjs'
 import { productDescription, READ_ONLY_ANNOTATIONS } from '../schemas.mjs'
 import { CURRENCY, cardPricing, effectivePrice, formatPrice, productUrl } from '../format.mjs'
 import { okResult, guarded } from '../tool-result.mjs'
@@ -96,6 +97,12 @@ export const outputSchema = z.object({
   product: ProductDetail
     .nullable()
     .describe('Fișa produsului, sau null dacă slug-ul nu corespunde niciunui produs activ.'),
+  order_restriction: z
+    .enum([HU_ONLY])
+    .nullable()
+    .describe(
+      'Restricția de comandă a produsului, sau null dacă n-are niciuna (și la found: false). hu_only = se poate comanda DOAR cu livrare în Ungaria; o comandă cu livrare în România va fi refuzată la plasare.',
+    ),
 })
 
 export const config = {
@@ -197,6 +204,7 @@ export function createHandler(deps = {}) {
         okResult(`Nu am găsit niciun produs activ pe tatuat.ro cu slug-ul „${slug}".`, {
           found: false,
           product: null,
+          order_restriction: null,
         })
 
       const row = await productBySlug(slug, passThrough)
@@ -222,7 +230,13 @@ export function createHandler(deps = {}) {
         .filter((p) => p !== null)
         .join(' · ')
 
-      return okResult(text, { found: true, product })
+      // Restricția vine din RÂNDUL brut, nu din `product`: `toProductDetail` compune
+      // fișa pentru client și nu poartă `lang` — dacă ar fi citită de acolo, ar ieși
+      // `null` pentru tot, adică exact tăcerea pe care câmpul o repară.
+      const restriction = orderRestrictionForRow(row)
+      const textFinal = restriction === null ? text : `${text} · ${ORDER_RESTRICTION_NOTICE[restriction]}`
+
+      return okResult(textFinal, { found: true, product, order_restriction: restriction })
     }, { onError: deps.onError })
   }
 }

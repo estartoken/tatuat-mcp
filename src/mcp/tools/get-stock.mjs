@@ -20,10 +20,18 @@
  * citesc tabele direct (nu RPC-ul cu gate RO-only), iar fișa de produs NU e
  * filtrată pe limbă în magazin — „ascuns dar cumpărabil" pe link direct, la fel
  * ca aici pe slug direct.
+ *
+ * 🔴 DE ACEEA răspunsul declară `order_restriction` (01.10.2026). Produsul
+ * `lang='hu'` ajunge aici pe slug și avea „stoc suficient" ca oricare altul, deși
+ * `place_order` îl refuză cu `product_hu_only` la orice livrare în România.
+ * Incidentul din 19.09 a fost exact asta: clientul a citit refuzul de la final ca
+ * „server picat" și a plecat pe WhatsApp. Produsul rămâne vizibil — se schimbă
+ * doar că restricția e SPUSĂ, nu descoperită la sfârșit.
  */
 
 import { z } from 'zod'
 import { productBySlug, productVariants } from '../catalog.mjs'
+import { HU_ONLY, ORDER_RESTRICTION_NOTICE, orderRestrictionForRow } from '../policy.mjs'
 import { productUrl } from '../format.mjs'
 import { READ_ONLY_ANNOTATIONS } from '../schemas.mjs'
 import { okResult, errorResult, guarded } from '../tool-result.mjs'
@@ -96,6 +104,12 @@ export const outputSchema = z.object({
     .number()
     .int()
     .describe('Cantitatea maximă comandabilă acum pe această linie de produs (plafon de linie).'),
+  order_restriction: z
+    .enum([HU_ONLY])
+    .nullable()
+    .describe(
+      'Restricția de comandă a produsului, sau null dacă n-are niciuna. hu_only = se poate comanda DOAR cu livrare în Ungaria; o comandă cu livrare în România va fi refuzată la plasare, oricât stoc ar exista.',
+    ),
 })
 
 export const config = {
@@ -250,6 +264,8 @@ export function createHandler(deps = {}) {
 
       const url = productUrl(origin, slug)
       const subject = variantName ? `${productName} (${variantName})` : productName
+      // Restricția se citește din RÂNDUL DE PRODUS, nu din variantă: `lang` e pe produs.
+      const restriction = orderRestrictionForRow(product)
       const text = buildText({
         state,
         subject,
@@ -259,8 +275,9 @@ export function createHandler(deps = {}) {
         maxOrderable: cap,
         url,
       })
+      const textFinal = restriction === null ? text : `${text} ${ORDER_RESTRICTION_NOTICE[restriction]}`
 
-      return okResult(text, {
+      return okResult(textFinal, {
         slug,
         product_id: productId,
         product_name: productName,
@@ -272,6 +289,7 @@ export function createHandler(deps = {}) {
         available_now: availableNow,
         backorder_qty: backorderQty,
         max_orderable: cap,
+        order_restriction: restriction,
       })
     }, { onError: deps.onError })
   }
