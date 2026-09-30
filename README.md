@@ -136,6 +136,16 @@ npm run dev            # Next dev pe :3000
 npm run build          # next build
 ```
 
+### Gardă înainte de push
+
+```bash
+git config core.hooksPath .githooks
+```
+
+Activează [`.githooks/pre-push`](.githooks/pre-push), care rulează `test:critical`
+și oprește push-ul dacă pică ceva. O singură dată pe clonă. Ocolire, când chiar
+trebuie: `git push --no-verify`.
+
 `npm run typecheck` acoperă și fișierele `.mjs` (`checkJs: true` plus `"**/*.mjs"` în
 `include`). Fără acele două linii, gate-ul privea zero fișiere și trecea mereu.
 
