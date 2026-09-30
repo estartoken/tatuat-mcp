@@ -270,7 +270,7 @@ export async function productsForShipping({ slugs, ids }, opts = {}) {
   // ambele într-o singură cerere de rețea.
   const rows = await select(
     'products',
-    `select=id,slug,price,sale_price,shipping_override,weight_g,lang,product_variants(price,sale_price)&or=(${filters.join(',')})&status=is.true&limit=${limit}`,
+    `select=id,slug,price,sale_price,shipping_override,weight_g,lang,product_variants(id,price,sale_price)&or=(${filters.join(',')})&status=is.true&limit=${limit}`,
     opts,
   )
   return asProductRows(rows).map(withVariantPricing)
