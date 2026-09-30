@@ -6,7 +6,22 @@
  * OMITEREA lui e fail-closed: serverul întoarce doar produsele cu `lang is null`,
  * adică RO. Comportamentul e verificat pgTAP în magazin (`lib/catalog-extra.ts`,
  * `lib/queries.ts`, owner 19.09). Faza 1 a pluginului e RO-only, deci `p_lang` nu
- * se trimite NICIODATĂ de aici — produsul FROST doar-Ungaria nu apare în ChatGPT.
+ * se trimite NICIODATĂ de aici — produsul FROST doar-Ungaria nu apare în LISTE.
+ *
+ * ⚠️ CORECTAT 30.09.2026, măsurat pe producție: fraza de mai sus spunea „nu apare în
+ * ChatGPT", ceea ce e FALS și promitea o garanție pe care canalul nu o are. Gate-ul
+ * `p_lang` acoperă LISTELE, atât. Măsurat pe un produs cu `lang='hu'`:
+ *   • `search_products` — NU îl întoarce (verificat pe `name` ȘI `slug`; câmpul e
+ *     `product_id`, nu `id`, iar o probă pe `id` iese vidă și pare verde). ✅
+ *   • `get_product` pe slug direct — îl întoarce ÎNTREG. Vezi paragraful de mai jos:
+ *     e paritate deliberată cu magazinul, nu un bug.
+ *   • `create_checkout` — poate semna un link care îl conține. Nu poate face altfel:
+ *     acel tool nu citește DB-ul deloc (zero cereri de rețea, by design), deci nu are
+ *     de unde să afle `lang`. Singurul gard de acolo e denylist-ul static.
+ * ⇒ Un agent putea parcurge tot drumul, iar comanda murea abia la `place_order` cu
+ * `product_hu_only`. Un refuz care apare doar la final, fără ca nimic de pe drum să-l
+ * fi anunțat, nu se citește ca regulă de business — se citește ca defecțiune.
+ * CE se face cu asta e decizia ownerului (vezi nota din `policy.mjs`).
  *
  * ⚠️ Tipurile generate ale magazinului (`lib/database.types.ts`) NU arată `p_lang`.
  * Sunt stale — o altă sesiune le regenerează. Sursa de adevăr folosită aici e codul
