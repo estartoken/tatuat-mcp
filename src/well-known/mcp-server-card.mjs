@@ -1,7 +1,13 @@
 /**
  * `GET /.well-known/mcp-server-card.json` — documentul static „server card" cerut
- * de intrarea ARD a serverului (vezi `tatuat-site/public/.well-known/ard.json`,
- * entry `urn:air:tatuat.ro:mcp:catalog`, câmp `url`).
+ * de intrarea ARD a serverului: `tatuat-site/public/.well-known/ard.json`,
+ * entry `urn:air:tatuat.ro:mcp:catalog`, câmp `url`.
+ *
+ * ⚠️ Referința aceea e ÎNAINTE, nu o stare: măsurat 30.09.2026,
+ * `https://tatuat.ro/.well-known/ard.json` întoarce **404** (și pe apex și pe `www`).
+ * Fișierul e §3 din handoff și cere un deploy separat pe `tatuat-site`, cu aprobare
+ * proprie. Documentul de aici e însă live și corect (verificat pe `api.tatuat.ro`),
+ * deci când ARD-ul va fi publicat va avea deja o țintă validă — nu invers.
  *
  * 🔴 Descoperit prin verificare directă a schemei oficiale (28.09.2026,
  * `ards-project/ard-spec`, `spec/ard.md` §4.4 + `spec/schemas/ard-entry.schema.json`):
