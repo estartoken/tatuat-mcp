@@ -99,26 +99,51 @@ if [[ "$ST" == "200" ]]; then ok "CONTROL POZITIV: Origin legitim → 200"; else
 ST=$(status)
 if [[ "$ST" == "200" ]]; then ok "CONTROL POZITIV: fără Origin (client non-browser) → 200"; else bad "cerere fără Origin respinsă cu $ST"; fi
 
-print -r -- "=== 5. create_checkout — link semnat + refuzul produselor excluse ==="
-rpc '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"create_checkout","arguments":{"items":[{"product_id":1,"variant_id":null,"qty":1,"options":{}}]}}}' | /usr/bin/python3 -c "
+print -r -- "=== 5. create_checkout — link semnat, ȘI ținta lui chiar REZOLVĂ ==="
+# De ce nu e destul să ne uităm la FORMA linkului: pe 30.09.2026 linkul avea forma perfectă
+# (`/cos-din-conversatie` + `c=` + `sig=`) și totuși ducea în **404**, fiindcă pagina de aterizare
+# (`01daa19`) trăia doar pe ramura `feat/chatgpt-agent-mcp`, nemerge-uită în ce era deployat pe
+# `tatuat.ro`. Un link care arată corect dar nu duce nicăieri e tot un checkout stricat.
+# Și atenție la capcana simetrică: un link cu semnătura STRICATĂ dădea tot 404, deci „respins" și
+# „ruta nu există" arătau identic — de aceea aici se cere 200 pe linkul VALID, ca control pozitiv.
+CO=$(rpc '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"create_checkout","arguments":{"items":[{"product_id":1,"variant_id":null,"qty":1,"options":{}}]}}}')
+LINK=$(print -r -- "$CO" | /usr/bin/python3 -c "
 import sys,json,re
 d=json.load(sys.stdin); r=d.get('result',{})
-txt=' '.join(c.get('text','') for c in r.get('content',[]))
 if r.get('isError'):
-    print('  ❌ create_checkout a întors eroare:', txt[:180])
-    if 'Configurație lipsă' in txt: print('     → AGENT_CHECKOUT_SECRET lipsește pe proiectul MCP')
+    txt=' '.join(c.get('text','') for c in r.get('content',[]))
+    sys.stderr.write('  ❌ create_checkout a întors eroare: '+txt[:180]+'\n')
+    if 'Configurație lipsă' in txt:
+        sys.stderr.write('     → AGENT_CHECKOUT_SECRET lipsește pe proiectul MCP\n')
     raise SystemExit(1)
-m=re.search(r'https://\S+', txt)
-if not m: print('  ❌ răspuns fără link'); raise SystemExit(1)
-url=m.group(0)
-print('  link:', url[:70]+'…')
-for need in ('/cos-din-conversatie','c=','sig='):
-    if need not in url: print('  ❌ linkul nu conține', need); raise SystemExit(1)
-print('  ✅ link semnat pe /cos-din-conversatie, cu payload + sig')
-print('  🔴 ATENȚIE: validarea semnăturii rulează în JS-ul paginii, nu pe server.')
-print('     curl NU poate distinge un link acceptat de unul respins — proba de')
-print('     falsificare se face DOAR în browser, pe pagina de coș.')
-" || FAIL=1
+url=(r.get('structuredContent') or {}).get('url') or ''
+if not url:
+    txt=' '.join(c.get('text','') for c in r.get('content',[]))
+    m=re.search(r'https://\S+', txt); url=m.group(0) if m else ''
+if not url:
+    sys.stderr.write('  ❌ răspuns fără link\n'); raise SystemExit(1)
+missing=[n for n in ('/cos-din-conversatie','c=','sig=') if n not in url]
+if missing:
+    sys.stderr.write('  ❌ linkul nu conține '+', '.join(missing)+'\n'); raise SystemExit(1)
+print(url)
+") || FAIL=1
+
+if [[ -n "$LINK" ]]; then
+  print -r -- "  link: ${LINK:0:72}…"
+  ok "forma e corectă: /cos-din-conversatie + payload + semnătură"
+  ST=$(curl -s -o /dev/null -w '%{http_code}' -L "$LINK")
+  if [[ "$ST" == "200" ]]; then
+    ok "ținta REZOLVĂ (HTTP $ST) — pagina de aterizare e deployată"
+  else
+    bad "ținta linkului întoarce HTTP $ST, nu 200 — checkout-ul agentului duce în gol"
+    print -r -- "     Verifică pe ce ramură trăiește pagina:"
+    print -r -- "     git -C ../tatuat-site log --all --oneline --diff-filter=A -- '*cos-din-conversatie*'"
+  fi
+  print -r -- "  🔴 Validarea semnăturii rulează în JS-ul paginii, nu pe server: curl vede 200 și"
+  print -r -- "     pentru un link falsificat. Proba de falsificare se face DOAR în browser — și"
+  print -r -- "     doar după ce verificarea de mai sus e verde, altfel măsori ruta, nu semnătura."
+fi
+
 rpc '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"create_checkout","arguments":{"items":[{"product_id":1455,"variant_id":null,"qty":1,"options":{}}]}}}' | /usr/bin/python3 -c "
 import sys,json
 d=json.load(sys.stdin); r=d.get('result',{})
