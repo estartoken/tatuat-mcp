@@ -27,6 +27,7 @@ import {
   GIFT2_PRODUCT_NAME,
   MAX_QUANTITY,
 } from './calculate-shipping.mjs'
+import { EXCLUDED_PRODUCTS } from '../policy.mjs'
 
 /** Mediu fals. Valori inventate — nicio cheie reală în teste. */
 const ENV = {
@@ -379,4 +380,154 @@ test('fiecare câmp de input și de output are descriere pentru model', () => {
   for (const [key, field] of Object.entries(outputSchema.shape)) {
     assert.ok(field.description, `outputSchema.${key} nu are .describe()`)
   }
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 🔴 PRODUSE CU VARIANTE — aceeași clasă de defect ca la `search_products`, ratată în primul val.
+//
+// Măsurat 29.09.2026 pe tabela `products` (sursa ACESTUI tool, nu view-ul): produsul
+// `ace-de-tatuat-cartus-limited-rl` are acolo `price = 0.00`; prețul real, 5.70, stă pe cele 19
+// variante. 55 din cele 1664 de produse active sunt așa. `effectivePrice` întorcea `0` — finit,
+// deci contribuia 0 la subtotal, nu era sărit ca o valoare lipsă — iar clientul cu coșul plin era
+// anunțat că mai are de cumpărat sute de lei până la transport gratuit.
+//
+// 🔑 DE CE MINIMUL E RĂSPUNSUL CORECT AICI. Tool-ul nu primește `variant_id` (vezi `inputSchema`),
+// deci nu poate ști ce variantă a ales clientul. Minimul variantelor greșește în direcția SIGURĂ:
+// subestimează subtotalul, deci nu promite niciodată un transport gratuit pe care clientul nu-l
+// primește. Supraestimarea ar face exact invers. Măsurat pe tot catalogul: la 0 din cele 63 de
+// produse cu variante minimul vine de la o variantă fără stoc, deci nu anunțăm un preț de neatins.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Rândul real al produsului, cu variantele îmbricate cum le întoarce PostgREST. */
+const RAND_CU_VARIANTE = {
+  id: 8312,
+  slug: 'ace-de-tatuat-cartus-limited-rl',
+  price: 0,
+  sale_price: null,
+  shipping_override: null,
+  weight_g: 10,
+  product_variants: [
+    { price: 5.7, sale_price: null },
+    { price: 5.7, sale_price: null },
+  ],
+}
+
+test('produs cu variante: subtotalul folosește prețul variantei, nu 0', async () => {
+  const { result } = await run(
+    { lines: [{ slug: 'ace-de-tatuat-cartus-limited-rl', quantity: 100 }] },
+    { rows: [RAND_CU_VARIANTE] },
+  )
+  assert.equal(structured(result).subtotal, 570, '100 × 5.70, nu 100 × 0')
+})
+
+test('🔴 coșul care DEPĂȘEȘTE pragul nu mai e anunțat ca sub prag', async () => {
+  // Defectul în forma lui vizibilă clientului: 570 RON e peste pragul de 300, deci transportul e
+  // gratuit. Înainte, tool-ul răspundea „mai sunt necesari 300.00 RON pentru transport gratuit".
+  const { result } = await run(
+    { lines: [{ slug: 'ace-de-tatuat-cartus-limited-rl', quantity: 100 }] },
+    { rows: [RAND_CU_VARIANTE] },
+  )
+  assert.equal(structured(result).shipping_fee, 0, 'peste prag ⇒ transport gratuit')
+  assert.equal(structured(result).free_shipping, true)
+  assert.equal(structured(result).amount_to_free_shipping, 0)
+  assert.doesNotMatch(result.content[0].text, /pentru transport gratuit/)
+})
+
+test('variante la prețuri diferite: se ia MINIMUL, nu maximul și nu media', async () => {
+  const { result } = await run(
+    { lines: [{ slug: 'p', quantity: 10 }] },
+    {
+      rows: [
+        {
+          ...RAND_CU_VARIANTE,
+          slug: 'p',
+          product_variants: [{ price: 6.97 }, { price: 3.97 }, { price: 5.5 }],
+        },
+      ],
+    },
+  )
+  assert.equal(structured(result).subtotal, 39.7, '10 × 3.97 — subestimare, nu supraestimare')
+})
+
+test('preț de bază NENUL + variante: se taxează varianta, nu prețul de bază', async () => {
+  // 🔴 Găsit prin testare de mutație: ștergerea lui `variant_count` din `withVariantPricing` nu
+  // pica niciun test, fiindcă toate fixture-urile aveau `price: 0` — acolo ramura se intră oricum
+  // prin `bazaLipsa`. La un produs cu preț de bază nenul ȘI variante, `variant_count` e SINGURA
+  // cale de intrare, iar fără el subtotalul ar folosi prețul de bază: bani, nu etichetă.
+  const { result } = await run(
+    { lines: [{ slug: 'p', quantity: 3 }] },
+    { rows: [{ ...RAND_CU_VARIANTE, slug: 'p', price: 100, product_variants: [{ price: 42 }, { price: 90 }] }] },
+  )
+  assert.equal(structured(result).subtotal, 126, '3 × 42 (varianta), nu 3 × 100 (prețul de bază)')
+})
+
+test('reducerea pe variantă intră în subtotal, nu prețul întreg al variantei', async () => {
+  const { result } = await run(
+    { lines: [{ slug: 'p', quantity: 4 }] },
+    { rows: [{ ...RAND_CU_VARIANTE, slug: 'p', product_variants: [{ price: 20, sale_price: 12 }] }] },
+  )
+  assert.equal(structured(result).subtotal, 48, '4 × 12, prețul chiar plătit')
+})
+
+test('CONTROL: produsul simplu nu e atins de ramura variantelor', async () => {
+  const { result } = await run(
+    { lines: [{ slug: 'simplu', quantity: 2 }] },
+    { rows: [{ id: 1, slug: 'simplu', price: 100, sale_price: 70, shipping_override: null, weight_g: 10 }] },
+  )
+  assert.equal(structured(result).subtotal, 140, 'reducerea reală se aplică, exact ca înainte')
+})
+
+test('CONTROL: variante fără preț valid nu fabrică un subtotal', async () => {
+  const { result } = await run(
+    { lines: [{ slug: 'p', quantity: 3 }] },
+    { rows: [{ ...RAND_CU_VARIANTE, slug: 'p', product_variants: [{ price: 0 }, { price: null }] }] },
+  )
+  assert.equal(structured(result).subtotal, 0, 'fără preț cunoscut nu inventăm unul')
+})
+
+test('o variantă cu preț 0 amestecată cu una validă NU trage minimul la 0', async () => {
+  // 🔴 Găsit de verificatorul adversarial prin mutația `p > 0` → `p >= 0`, care rămânea verde pe
+  // toate cele 253 de teste. Singurul test cu „variante fără preț valid" le are pe AMBELE
+  // invalide, deci nu discriminează: și codul corect, și mutantul dau 0 acolo. Cazul care
+  // discriminează e AMESTECUL — o variantă cu preț 0 lângă una reală. Cu mutantul, minimul devine
+  // 0 și subtotalul unui coș de 57 RON iese 0: exact regresia „preț 0" de la care a pornit tot
+  // fixul, reintrodusă pe altă coloană.
+  const { result } = await run(
+    { lines: [{ slug: 'p', quantity: 10 }] },
+    { rows: [{ ...RAND_CU_VARIANTE, slug: 'p', product_variants: [{ price: 0 }, { price: 5.7 }] }] },
+  )
+  assert.equal(structured(result).subtotal, 57, '10 × 5.70 — varianta cu preț 0 nu e un preț')
+})
+
+test('produsul EXCLUS din canal nu-și scurge prețul prin calculate_shipping', async () => {
+  // Drumul de shipping citește direct tabela `products`, nu view-ul, deci are propriul apel la
+  // `filterAllowedProducts`. Niciun test nu-l acoperea: inversarea ordinii lui față de
+  // `withVariantPricing` rămânea verde. Aici e un anestezic cu lidocaină — dacă ar intra în
+  // subtotal, tool-ul ar confirma implicit că produsul e cumpărabil prin canalul ChatGPT.
+  const [exclus] = EXCLUDED_PRODUCTS
+  const { result } = await run(
+    { lines: [{ product_id: exclus.id, quantity: 4 }] },
+    { rows: [{ ...RAND_CU_VARIANTE, id: exclus.id, slug: 'anestezic', price: 120, product_variants: [] }] },
+  )
+  assert.equal(structured(result).subtotal, 0, `${exclus.name} trebuie tratat ca produs necunoscut`)
+})
+
+test('CONTROL: taxa de colet greu supraviețuiește schimbării de interogare', async () => {
+  const { result } = await run(
+    { lines: [{ slug: 'p', quantity: 2 }] },
+    { rows: [{ ...RAND_CU_VARIANTE, slug: 'p', shipping_override: 50 }] },
+  )
+  assert.equal(structured(result).shipping_fee, 100, '2 × 50, override-ul nu s-a pierdut')
+  assert.equal(structured(result).heavy_shipping, true, 'ramura „greu", nu tariful standard')
+})
+
+test('interogarea cere efectiv variantele — altfel fixul n-ar avea de unde ști prețul', async () => {
+  const { calls } = await run(
+    { lines: [{ slug: 'ace-de-tatuat-cartus-limited-rl', quantity: 1 }] },
+    { rows: [RAND_CU_VARIANTE] },
+  )
+  const url = decodeURIComponent(calls[0].url)
+  assert.match(url, /product_variants\(/, 'select-ul trebuie să îmbrice variantele')
+  assert.match(url, /shipping_override/, 'coloanele vechi rămân — taxa de colet greu nu se pierde')
+  assert.equal(calls.length, 1, 'o singură cerere de rețea, nu una în plus pentru variante')
 })

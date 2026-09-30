@@ -5,7 +5,7 @@
  *
  * Decizie de input (nu era impusă de spec): tool-ul acceptă ORICARE dintre
  *  - `lines`: liniile coșului (slug SAU product_id + quantity) — subtotalul se
- *    calculează din prețul REAL citit din catalog (`effectivePrice`), nu dintr-unul
+ *    calculează din prețul REAL citit din catalog (`cardPricing`), nu dintr-unul
  *    declarat de model; permite și detectarea produselor „grele" (`shipping_override`);
  *  - `subtotal`: o sumă deja cunoscută în RON, când modelul a calculat-o deja din
  *    `search_products`/`get_product` și o interogare suplimentară e inutilă
@@ -23,7 +23,7 @@
 
 import { z } from 'zod'
 import { productsForShipping } from '../catalog.mjs'
-import { CURRENCY, effectivePrice } from '../format.mjs'
+import { CURRENCY, cardPricing } from '../format.mjs'
 import { READ_ONLY_ANNOTATIONS } from '../schemas.mjs'
 import { okResult, guarded } from '../tool-result.mjs'
 import { enforce } from '../rate-limit.mjs'
@@ -207,7 +207,11 @@ export function createHandler(deps = {}) {
           const row = line.slug !== undefined ? bySlug.get(line.slug) : byId.get(line.product_id)
           // Produs necunoscut/dezactivat: linia nu contribuie — fail-closed, nu preț inventat.
           if (!row) continue
-          const price = effectivePrice(/** @type {{ price?: number | null, sale_price?: number | null }} */ (row))
+          // `cardPricing`, nu `effectivePrice`: la produsele cu variante `products.price` e 0, iar
+          // prețul real vine din variantele îmbricate de `productsForShipping`. Tool-ul nu primește
+          // `variant_id`, deci folosim minimul — subestimează subtotalul, deci nu promite niciodată
+          // un transport gratuit pe care clientul nu-l primește. Vezi testele din acest fișier.
+          const { price } = cardPricing(row)
           if (price !== null) subtotal += price * line.quantity
           heavyTotal += heavyFeeFor(row, line.quantity)
         }

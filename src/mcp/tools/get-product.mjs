@@ -20,7 +20,7 @@
 import { z } from 'zod'
 import { productBySlug, productVariants, brandNames } from '../catalog.mjs'
 import { productDescription, READ_ONLY_ANNOTATIONS } from '../schemas.mjs'
-import { CURRENCY, effectivePrice, formatPrice, productUrl } from '../format.mjs'
+import { CURRENCY, cardPricing, effectivePrice, formatPrice, productUrl } from '../format.mjs'
 import { okResult, guarded } from '../tool-result.mjs'
 import { enforce } from '../rate-limit.mjs'
 import { siteOrigin } from '../env.mjs'
@@ -64,11 +64,18 @@ const ProductDetail = z.object({
   price: z
     .number()
     .nullable()
-    .describe('Prețul efectiv de plată (prețul redus dacă produsul e la promoție).'),
+    .describe(
+      'Prețul efectiv de plată (prețul redus dacă produsul e la promoție). La produsele cu variante e prețul CELEI MAI IEFTINE variante — vezi price_from și lista `variants`.',
+    ),
   price_before: z
     .number()
     .nullable()
     .describe('Prețul dinainte de reducere, sau null dacă produsul nu e la promoție.'),
+  price_from: z
+    .boolean()
+    .describe(
+      'Dacă true, `price` e cel mai mic preț dintre variante, nu prețul exact — anunță-l clientului ca „de la X RON" și folosește `variants` pentru prețul variantei alese. Dacă false, `price` e prețul exact.',
+    ),
   currency: z.literal(CURRENCY).describe('Moneda prețului. Întotdeauna RON.'),
   in_stock: z.boolean().describe('Dacă produsul poate fi comandat acum.'),
   variant_count: z
@@ -134,10 +141,9 @@ function toProductDetail(row, variantRows, ctx) {
   if (typeof id !== 'number' || typeof slug !== 'string' || typeof name !== 'string') {
     return null
   }
-  const price = effectivePrice(
-    /** @type {{ price?: number | null, sale_price?: number | null }} */ (row),
-  )
-  const list = typeof row.price === 'number' ? row.price : null
+  // Aceeași regulă ca pe cardul din listă (`cardPricing`, format.mjs): la produsele cu variante
+  // prețul de bază din view e 0, iar prețul real e minimul variantelor, din `from_price`.
+  const { price, price_before, price_from } = cardPricing(row)
   const brandId = typeof row.brand_id === 'number' ? row.brand_id : null
   const variants = variantRows.map(toVariant).filter((v) => v !== null)
   return {
@@ -148,7 +154,8 @@ function toProductDetail(row, variantRows, ctx) {
     url: productUrl(ctx.origin, slug),
     price,
     // „redus de la" doar când reducerea e reală; altfel modelul ar anunța o promoție inexistentă.
-    price_before: price !== null && list !== null && list > price ? list : null,
+    price_before,
+    price_from,
     currency: CURRENCY,
     in_stock: row.in_stock === true,
     variant_count: typeof row.variant_count === 'number' ? row.variant_count : variants.length,
@@ -207,7 +214,7 @@ export function createHandler(deps = {}) {
       if (product === null) return notFound()
 
       const text = [
-        `${product.name} — ${formatPrice(product.price)}`,
+        `${product.name} — ${product.price_from && product.price !== null ? 'de la ' : ''}${formatPrice(product.price)}`,
         product.in_stock ? 'în stoc' : 'stoc epuizat',
         product.variants.length > 0 ? `${product.variants.length} variante` : null,
         product.url,

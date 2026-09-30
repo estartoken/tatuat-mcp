@@ -18,6 +18,7 @@
 
 import { rpc, select } from './postgrest.mjs'
 import { filterAllowedProducts, allowedProductOrNull } from './policy.mjs'
+import { effectivePrice } from './format.mjs'
 
 /**
  * Exact coloanele cardului. RPC-urile întorc altfel TOT (inclusiv `search_tsv` și
@@ -28,7 +29,7 @@ export const CARD_SELECT =
 
 /** Coloanele fișei de produs. */
 export const DETAIL_SELECT =
-  'id,slug,name,description,price,sale_price,on_sale,sale_start,sale_end,from_price,from_price_max,in_stock,stock_qty,primary_image,variant_count,brand_id,sku,weight_g,model'
+  'id,slug,name,description,price,sale_price,on_sale,sale_start,sale_end,from_price,from_price_was,from_price_max,in_stock,stock_qty,primary_image,variant_count,brand_id,sku,weight_g,model'
 
 /**
  * Sortările acceptate de `products_in_category`.
@@ -225,10 +226,47 @@ export async function productsForShipping({ slugs, ids }, opts = {}) {
   // cerute, ar fi o cifră fără referent: un plafon de 3 pe o interogare de 2.
   const limit = uniqueSlugs.length + uniqueIds.length
 
+  // 🔴 `product_variants(...)` ÎMBRICAT, nu o a doua cerere. La cele 55 de produse cu variante,
+  // `products.price` e 0 (măsurat 29.09.2026 direct în tabelă, nu în view) — prețul real stă pe
+  // variantă. Fără coloana asta, subtotalul unui coș plin ieșea 0 și clientul era anunțat că mai
+  // are de cumpărat până la transport gratuit, deși îl avea deja.
+  //
+  // 🔑 DE CE NU view-ul `v_products_with_pricing`, care are deja `from_price`: nu are
+  // `shipping_override`, iar fără el taxa de colet greu s-ar pierde tăcut. Îmbricarea păstrează
+  // ambele într-o singură cerere de rețea.
   const rows = await select(
     'products',
-    `select=id,slug,price,sale_price,shipping_override,weight_g&or=(${filters.join(',')})&status=is.true&limit=${limit}`,
+    `select=id,slug,price,sale_price,shipping_override,weight_g,product_variants(price,sale_price)&or=(${filters.join(',')})&status=is.true&limit=${limit}`,
     opts,
   )
-  return asProductRows(rows)
+  return asProductRows(rows).map(withVariantPricing)
+}
+
+/**
+ * Traduce variantele îmbricate în forma pe care o citește `cardPricing`: `from_price` (minimul
+ * prețurilor efective de variantă), `from_price_max` și `variant_count`.
+ *
+ * Rândul rezultat arată ca unul de catalog, deci regula de preț rămâne una singură, în
+ * `format.mjs` — nu apare o a doua implementare care să devieze de prima.
+ *
+ * @param {Record<string, unknown>} row
+ * @returns {Record<string, unknown>}
+ */
+function withVariantPricing(row) {
+  const variants = Array.isArray(row.product_variants) ? row.product_variants : []
+  if (variants.length === 0) return row
+  // `flatMap`, nu `map().filter()`: un `.filter(p => p !== null)` nu îngustează tipul, iar
+  // `Math.min` ar primi `(number | null)[]` — `null` se coerce la 0 și minimul ar ieși 0, adică
+  // exact regresia „preț 0" de la care a pornit fixul, reintrodusă pe altă cale.
+  const preturi = variants.flatMap((v) => {
+    const p = effectivePrice(/** @type {{ price?: number | null, sale_price?: number | null }} */ (v))
+    return p !== null && p > 0 ? [p] : []
+  })
+  if (preturi.length === 0) return { ...row, variant_count: variants.length }
+  return {
+    ...row,
+    variant_count: variants.length,
+    from_price: Math.min(...preturi),
+    from_price_max: Math.max(...preturi),
+  }
 }

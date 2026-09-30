@@ -10,7 +10,7 @@
  */
 
 import { z } from 'zod'
-import { CURRENCY, effectivePrice, formatPrice, productUrl, truncateAtWord } from './format.mjs'
+import { CURRENCY, cardPricing, formatPrice, productUrl, truncateAtWord } from './format.mjs'
 
 /** Identificator stabil de produs — cerință explicită OpenAI pentru plugins. */
 export const ProductCard = z.object({
@@ -21,11 +21,18 @@ export const ProductCard = z.object({
   price: z
     .number()
     .nullable()
-    .describe('Prețul efectiv de plată (prețul redus dacă produsul e la promoție).'),
+    .describe(
+      'Prețul efectiv de plată (prețul redus dacă produsul e la promoție). La produsele cu variante e prețul CELEI MAI IEFTINE variante — vezi price_from.',
+    ),
   price_before: z
     .number()
     .nullable()
     .describe('Prețul dinainte de reducere, sau null dacă produsul nu e la promoție.'),
+  price_from: z
+    .boolean()
+    .describe(
+      'Dacă true, `price` e cel mai mic preț dintre variante, nu prețul exact — anunță-l clientului ca „de la X RON". Dacă false, `price` e prețul exact.',
+    ),
   currency: z.literal(CURRENCY).describe('Moneda prețului. Întotdeauna RON.'),
   in_stock: z.boolean().describe('Dacă produsul poate fi comandat acum.'),
   variant_count: z
@@ -39,7 +46,11 @@ export const ProductCard = z.object({
 export const summaryLine = (/** @type {z.infer<typeof ProductCard>} */ card) =>
   [
     card.name,
-    formatPrice(card.price),
+    // „de la" doar când prețul e un MINIM. Fără el, „3.97 RON" la un produs ale cărui variante
+    // urcă la 6.97 e o afirmație falsă pe care modelul o repetă clientului cuvânt cu cuvânt.
+    card.price_from && card.price !== null
+      ? `de la ${formatPrice(card.price)}`
+      : formatPrice(card.price),
     card.price_before !== null ? `(redus de la ${formatPrice(card.price_before)})` : null,
     card.in_stock ? 'în stoc' : 'stoc epuizat',
     card.variant_count > 0 ? `${card.variant_count} variante` : null,
@@ -63,10 +74,9 @@ export function toProductCard(row, ctx) {
   if (typeof id !== 'number' || typeof slug !== 'string' || typeof name !== 'string') {
     return null
   }
-  const price = effectivePrice(
-    /** @type {{ price?: number | null, sale_price?: number | null }} */ (row),
-  )
-  const list = typeof row.price === 'number' ? row.price : null
+  // `cardPricing`, nu `effectivePrice`: la produsele cu variante prețul de bază e 0 și prețul real
+  // stă în `from_price`. Vezi comentariul din format.mjs — cardul întorcea literal `price: 0`.
+  const { price, price_before, price_from } = cardPricing(row)
   const brandId = typeof row.brand_id === 'number' ? row.brand_id : null
   return {
     product_id: id,
@@ -75,7 +85,8 @@ export function toProductCard(row, ctx) {
     url: productUrl(ctx.origin, slug),
     price,
     // „redus de la" doar când reducerea e reală; altfel modelul ar anunța o promoție inexistentă.
-    price_before: price !== null && list !== null && list > price ? list : null,
+    price_before,
+    price_from,
     currency: CURRENCY,
     in_stock: row.in_stock === true,
     variant_count: typeof row.variant_count === 'number' ? row.variant_count : 0,
