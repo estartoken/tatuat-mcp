@@ -103,6 +103,7 @@ test('subtotal PESTE prag (301) → transport gratuit', async () => {
   const out = structured(result)
   assert.equal(out.shipping_fee, 0)
   assert.equal(out.free_shipping, true)
+  assert.match(result.content[0].text, /doar subtotalul.*tarife proprii/)
 })
 
 test('subtotal cu rotunjire flotantă exact pe prag nu cade de partea greșită', async () => {

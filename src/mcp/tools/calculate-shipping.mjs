@@ -282,6 +282,9 @@ export function createHandler(deps = {}) {
           : freeShipping
             ? 'Transport gratuit.'
             : `Transport ${shippingFee.toFixed(2)} RON. Mai sunt necesari ${amountToFreeShipping.toFixed(2)} RON pentru transport gratuit.`,
+        args.subtotal !== undefined
+          ? 'Estimarea folosește doar subtotalul; pentru a verifica eventuale tarife proprii ale produselor, trimite liniile coșului.'
+          : null,
         reached.length > 0 ? `Cadouri atinse: ${reached.join(', ')}.` : null,
         upcoming
           ? `Următorul cadou: ${upcoming.name}, mai sunt necesari ${upcoming.amount_needed.toFixed(2)} RON.`
