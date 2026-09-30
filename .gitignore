@@ -2,16 +2,20 @@ node_modules/
 .next/
 out/
 build/
-.vercel/
 *.tsbuildinfo
 next-env.d.ts
 
-# Secrete — valorile vin din Keychain / env-ul Vercel, niciodată din repo
+# Secrete — valorile vin din Keychain / env-ul Vercel, niciodată din repo.
+# ⚠️ Ordinea contează: un `.env*` pus DUPĂ negație ar anula-o tăcut.
 .env
 .env.*
 !.env.example
 
+.vercel
+.vercel/
+
+# Note interne de lucru (stare de deploy, sesiuni, măsurători) — rămân pe disc.
+HANDOFF-*.md
+
 .DS_Store
 npm-debug.log*
-.vercel
-.env*
