@@ -4,6 +4,8 @@
 pentru ChatGPT, Claude și orice agent AI.** Caută produse, verifică stocul real, calculează
 transportul și generează un link de comandă, direct din conversație.
 
+**Documentație publică:** [api.tatuat.ro](https://api.tatuat.ro/) · [llms.txt](https://api.tatuat.ro/llms.txt)
+
 🟢 **Live:** `https://api.tatuat.ro/mcp` · transport streamable HTTP · fără autentificare
 
 > **English** — MCP server exposing the [TATUAT.RO](https://tatuat.ro) catalog (tattoo &
@@ -21,7 +23,7 @@ transportul și generează un link de comandă, direct din conversație.
 | `search_products` | Caută după nume, brand sau tip de produs. Întoarce preț în RON, disponibilitate și link direct la fișă. |
 | `browse_category` | O pagină de produse dintr-o categorie (sau din tot catalogul), cu sortare. |
 | `get_product` | Fișa completă: descriere, preț efectiv, preț dinainte de reducere, brand, variante cu preț și stoc propriu. |
-| `get_stock` | Disponibilitatea reală pentru o cantitate cerută. Patru stări: integral, parțial, pe comandă, indisponibil. |
+| `get_stock` | Disponibilitatea reală pentru o cantitate cerută. Patru stări: integral, parțial, precomandă și cantitate la plafonul maxim pe linie. |
 | `calculate_shipping` | Cost de transport, pragul de transport gratuit și cadourile atinse la prag. |
 | `create_checkout` | Link semnat către coșul de pe tatuat.ro. Valabil 15 minute. |
 
@@ -32,7 +34,7 @@ plasează comanda și nu atinge baza de date.
 
 > — *Am nevoie de cartușe 0.30 RL, vreo 20 de bucăți. Cât mă costă cu transport?*
 
-Agentul apelează `search_products` → `get_stock` → `calculate_shipping`, răspunde cu prețul
+Agentul apelează `search_products` → `get_product` (alege varianta) → `get_stock` → `calculate_shipping`, răspunde cu prețul
 real și cu cât mai trebuie până la transport gratuit, apoi `create_checkout` dă linkul pe
 care clientul finalizează comanda pe tatuat.ro.
 
@@ -55,7 +57,13 @@ Prețul contractual e **RON**, etichetat explicit în fiecare răspuns. Magazinu
 e exact felul în care un client ajunge să creadă că plătește altă sumă.
 
 La produsele cu variante (mărimi, configurații) prețul întors e **minimul dintre variante**,
-marcat `price_from: true` ca agentul să spună „de la X RON", nu „X RON".
+marcat `price_from: true` când variantele au prețuri diferite, ca agentul să spună „de la X RON", nu „X RON".
+
+Pentru `calculate_shipping`, fiecare linie acceptă `variant_id` din `get_product`.
+Când variantele au prețuri diferite, ID-ul este necesar pentru un total exact. Fără el,
+serverul cere selecția. Un produs/variantă neconfirmată sau un preț lipsă oprește calculul
+cu `isError`, fără un subtotal parțial. Produsele cu variante la același preț pot fi
+calculate fără selecție. `subtotal` direct nu poate verifica produse sau tarife de colet greu.
 
 ## Ce NU face
 
@@ -75,6 +83,9 @@ marcat `price_from: true` ca agentul să spună „de la X RON", nu „X RON".
 
 | Rută | Metode | Ce face |
 |---|---|---|
+| `/` | GET | Documentație publică indexabilă, fără JavaScript sau autentificare. |
+| `/robots.txt` | GET | Permite documentația și exclude transportul MCP și verificarea domeniului. |
+| `/llms.txt` | GET | Rezumat compact al conectării, uneltelor și regulilor de utilizare. |
 | `/mcp` | POST, GET, DELETE | Endpointul MCP. Toate trei delegate pachetului, ca 405-ul să vină de la protocol, nu de la Next. |
 | `/.well-known/mcp-server-card.json` | GET | Cartea de vizită a serverului. |
 | `/.well-known/openai-apps-challenge` | GET | Verificarea proprietății domeniului. Întoarce **doar** tokenul din `OPENAI_APPS_CHALLENGE_TOKEN`; **404** dacă lipsește. |
@@ -122,7 +133,7 @@ proiectului Vercel în producție și din macOS Keychain la setup local — nici
 - **Rate limiting singleton la nivel de modul.** `createMcpHandler` rulează factory-ul pe
   fiecare cerere; o găleată creată în factory s-ar reseta de fiecare dată. Plafonul e
   per-instanță de funcție, deci „best effort", nu global.
-- **RO-only deliberat.** `p_lang` nu se trimite, deci produsele doar-Ungaria nu apar.
+- **Căutare în catalogul RO.** `p_lang` nu se trimite în căutare/listare. Fișele accesate direct pot întoarce produse cu livrare limitată la Ungaria; `get_product`, `get_stock` și `calculate_shipping` declară atunci `order_restriction: "hu_only"`.
   Fail-closed.
 - **Proiect separat de magazin**, ca un tool schimbat să nu ceară redeploy al site-ului.
 

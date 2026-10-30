@@ -1,11 +1,11 @@
 /**
  * `calculate_shipping` — cost transport + prag gratuit + cadouri la prag, portat
- * 1:1 din tatuat-site (`lib/product-extra.ts`, `lib/gifts.ts`). Formă copiată din
+ * din tatuat-site (`lib/product-extra.ts`, `lib/gifts.ts`). Formă copiată din
  * FORMA CANONICĂ (`search-products.mjs`).
  *
  * Decizie de input (nu era impusă de spec): tool-ul acceptă ORICARE dintre
- *  - `lines`: liniile coșului (slug SAU product_id + quantity) — subtotalul se
- *    calculează din prețul REAL citit din catalog (`cardPricing`), nu dintr-unul
+ *  - `lines`: liniile coșului (slug SAU product_id + quantity, cu variant_id opțional) — subtotalul se
+ *    calculează din prețul REAL al produsului sau variantei alese, citit din catalog, nu dintr-unul
  *    declarat de model; permite și detectarea produselor „grele" (`shipping_override`);
  *  - `subtotal`: o sumă deja cunoscută în RON, când modelul a calculat-o deja din
  *    `search_products`/`get_product` și o interogare suplimentară e inutilă
@@ -24,9 +24,9 @@
 import { z } from 'zod'
 import { productsForShipping } from '../catalog.mjs'
 import { HU_ONLY, ORDER_RESTRICTION_NOTICE, orderRestrictionForRow } from '../policy.mjs'
-import { CURRENCY, cardPricing } from '../format.mjs'
+import { CURRENCY, effectivePrice } from '../format.mjs'
 import { READ_ONLY_ANNOTATIONS } from '../schemas.mjs'
-import { okResult, guarded } from '../tool-result.mjs'
+import { okResult, errorResult, guarded } from '../tool-result.mjs'
 import { enforce } from '../rate-limit.mjs'
 
 export const name = 'calculate_shipping'
@@ -67,6 +67,12 @@ const CartLine = z
       .positive()
       .optional()
       .describe('Identificatorul numeric al produsului, alternativă la slug.'),
+    variant_id: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe('ID-ul variantei alese, din get_product. Necesar dacă variantele au prețuri diferite; omite pentru produse simple.'),
     quantity: z
       .number()
       .int()
@@ -74,7 +80,7 @@ const CartLine = z
       .max(MAX_QUANTITY)
       .describe('Câte bucăți din acest produs sunt în coș.'),
   })
-  .describe('O linie de coș: exact unul dintre slug sau product_id, plus cantitatea.')
+  .describe('O linie de coș: exact unul dintre slug sau product_id, cantitatea și variant_id pentru varianta aleasă.')
   .refine((line) => (line.slug !== undefined) !== (line.product_id !== undefined), {
     message: 'Exact unul dintre slug și product_id trebuie dat, nu ambele și nu niciunul.',
   })
@@ -132,7 +138,7 @@ export const outputSchema = z.object({
 export const config = {
   title: 'Calculează transportul pe tatuat.ro',
   description:
-    "Calculează costul de transport, pragul pentru transport gratuit și cadourile atinse la prag pentru un coș tatuat.ro. Dă fie 'lines' (produsele coșului, ca tool-ul să citească prețul real din catalog), fie un 'subtotal' deja cunoscut. Folosește acest tool când clientul întreabă cât costă transportul sau cât mai trebuie să cumpere pentru livrare gratuită sau cadou.",
+    "Calculează costul de transport, pragul pentru transport gratuit și cadourile atinse la prag pentru un coș tatuat.ro. Dă fie 'lines' (produsele coșului, ca tool-ul să citească prețul real din catalog), fie un 'subtotal' deja cunoscut. Pentru variante cu prețuri diferite, trimite variant_id din get_product. Un produs sau o variantă neconfirmată oprește calculul, fără total parțial. Folosește acest tool când clientul întreabă cât costă transportul sau cât mai trebuie să cumpere pentru livrare gratuită sau cadou.",
   inputSchema,
   outputSchema,
   annotations: READ_ONLY_ANNOTATIONS,
@@ -175,7 +181,7 @@ function giftsReached(subtotal) {
  */
 export function createHandler(deps = {}) {
   /**
-   * @param {{ lines?: { slug?: string, product_id?: number, quantity: number }[], subtotal?: number }} args
+   * @param {{ lines?: { slug?: string, product_id?: number, variant_id?: number, quantity: number }[], subtotal?: number }} args
    * @param {{ sessionId?: string }} [ctx]
    * @returns {Promise<import('../tool-result.mjs').ToolResult>}
    */
@@ -190,15 +196,8 @@ export function createHandler(deps = {}) {
 
       let subtotal
       let heavyTotal = 0
-      // 🔴 Se umple în BUCLA de linii, pe rândul care a CONTRIBUIT la subtotal — nu pe `rows`
-      // și nici pe liniile din input. `productsForShipping` scoate produsele inexistente sau
-      // excluse de politică, iar o linie nerezolvată sare cu `continue`: dacă restricția s-ar
-      // citi din `rows`, un produs care n-a intrat la socoteală ar putea pune avertismentul pe
-      // un coș în care nu e. Măsurat 01.10.2026: slug inexistent → subtotal 0.00, produsul
-      // `lang='hu'` → 50.00, deci contribuția e chiar dovada prezenței.
-      //
-      // Pe ramura cu `subtotal` dat de apelant rămâne `null`, corect: produsele nu sunt
-      // cunoscute aici, deci tool-ul nu are ce declara.
+      // Restricția se citește numai din liniile confirmate ale coșului.
+      // Cu subtotal direct produsele nu sunt cunoscute, deci rămâne null.
       /** @type {typeof HU_ONLY | null} */
       let restriction = null
 
@@ -223,15 +222,34 @@ export function createHandler(deps = {}) {
         subtotal = 0
         for (const line of lines) {
           const row = line.slug !== undefined ? bySlug.get(line.slug) : byId.get(line.product_id)
-          // Produs necunoscut/dezactivat: linia nu contribuie — fail-closed, nu preț inventat.
-          if (!row) continue
-          // `cardPricing`, nu `effectivePrice`: la produsele cu variante `products.price` e 0, iar
-          // prețul real vine din variantele îmbricate de `productsForShipping`. Tool-ul nu primește
-          // `variant_id`, deci folosim minimul — subestimează subtotalul, deci nu promite niciodată
-          // un transport gratuit pe care clientul nu-l primește. Vezi testele din acest fișier.
+          const reference = line.slug ?? `#${line.product_id}`
+          if (!row) {
+            return errorResult(`Nu pot confirma produsul „${reference}” în catalogul tatuat.ro. Verifică produsul cu search_products/get_product și reîncearcă; transportul nu a fost calculat.`)
+          }
+          const variants = Array.isArray(row.product_variants) ? row.product_variants : []
+          let price
+          if (line.variant_id !== undefined) {
+            const variant = variants.find((v) => v.id === line.variant_id)
+            if (!variant) {
+              return errorResult(`Varianta cerută nu aparține produsului „${reference}” sau nu mai este disponibilă în catalog. Alege un variant_id din get_product; transportul nu a fost calculat.`)
+            }
+            price = effectivePrice(variant)
+          } else if (variants.length > 0) {
+            const prices = variants.map((v) => effectivePrice(v))
+            // Fără selecție explicită putem confirma totalul doar dacă TOATE variantele
+            // au același preț valid. Minimul ar putea schimba gratuitatea sau cadoul.
+            if (prices.some((p) => p === null || p <= 0) || new Set(prices).size !== 1) {
+              return errorResult(`Alege varianta produsului „${reference}” cu get_product și trimite variant_id. Prețul exact nu poate fi confirmat fără selecție; transportul nu a fost calculat.`)
+            }
+            price = prices[0]
+          } else {
+            price = effectivePrice(row)
+          }
+          if (price === null || price === undefined || price < 0 || (variants.length > 0 && price === 0)) {
+            return errorResult(`Prețul produsului „${reference}” nu poate fi confirmat momentan. Transportul nu a fost calculat; verifică prețul pe tatuat.ro.`)
+          }
           if (restriction === null && orderRestrictionForRow(row) === HU_ONLY) restriction = HU_ONLY
-          const { price } = cardPricing(row)
-          if (price !== null) subtotal += price * line.quantity
+          subtotal += price * line.quantity
           heavyTotal += heavyFeeFor(row, line.quantity)
         }
       }
@@ -264,6 +282,9 @@ export function createHandler(deps = {}) {
           : freeShipping
             ? 'Transport gratuit.'
             : `Transport ${shippingFee.toFixed(2)} RON. Mai sunt necesari ${amountToFreeShipping.toFixed(2)} RON pentru transport gratuit.`,
+        args.subtotal !== undefined
+          ? 'Estimarea folosește doar subtotalul; pentru a verifica eventuale tarife proprii ale produselor, trimite liniile coșului.'
+          : null,
         reached.length > 0 ? `Cadouri atinse: ${reached.join(', ')}.` : null,
         upcoming
           ? `Următorul cadou: ${upcoming.name}, mai sunt necesari ${upcoming.amount_needed.toFixed(2)} RON.`

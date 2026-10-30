@@ -103,6 +103,7 @@ test('subtotal PESTE prag (301) → transport gratuit', async () => {
   const out = structured(result)
   assert.equal(out.shipping_fee, 0)
   assert.equal(out.free_shipping, true)
+  assert.match(result.content[0].text, /doar subtotalul.*tarife proprii/)
 })
 
 test('subtotal cu rotunjire flotantă exact pe prag nu cade de partea greșită', async () => {
@@ -155,9 +156,11 @@ test('preț redus: subtotalul folosește sale_price, ca effectivePrice din catal
   assert.equal(structured(result).subtotal, 70)
 })
 
-test('produs necunoscut în catalog: linia nu contribuie la subtotal (fail-closed, nu preț inventat)', async () => {
+test('produs necunoscut în catalog: oprește calculul fără subtotal parțial', async () => {
   const { result } = await run({ lines: [{ slug: 'nu-exista', quantity: 5 }] }, { rows: [] })
-  assert.equal(structured(result).subtotal, 0)
+  assert.equal(result.isError, true)
+  assert.equal(result.structuredContent, undefined)
+  assert.match(result.content[0].text, /nu-exista/)
 })
 
 // ── produse grele (shipping_override) ─────────────────────────────────────────
@@ -327,7 +330,7 @@ test('PostgREST 500 pe /products → isError, fără structuredContent și făr�
   assert.equal(text.includes('500'), false, 'a scurs statusul HTTP brut')
 })
 test('control: catalogul răspunde 200 → rezultat valid, nu eroare', async () => {
-  const { result } = await run({ lines: [{ slug: 'x', quantity: 1 }] }, { rows: [] })
+  const { result } = await run({ lines: [{ slug: 'x', quantity: 1 }] }, { rows: [{ id: 101, slug: 'x', price: 10 }] })
   assert.equal(result.isError, undefined)
 })
 
@@ -391,11 +394,8 @@ test('fiecare câmp de input și de output are descriere pentru model', () => {
 // deci contribuia 0 la subtotal, nu era sărit ca o valoare lipsă — iar clientul cu coșul plin era
 // anunțat că mai are de cumpărat sute de lei până la transport gratuit.
 //
-// 🔑 DE CE MINIMUL E RĂSPUNSUL CORECT AICI. Tool-ul nu primește `variant_id` (vezi `inputSchema`),
-// deci nu poate ști ce variantă a ales clientul. Minimul variantelor greșește în direcția SIGURĂ:
-// subestimează subtotalul, deci nu promite niciodată un transport gratuit pe care clientul nu-l
-// primește. Supraestimarea ar face exact invers. Măsurat pe tot catalogul: la 0 din cele 63 de
-// produse cu variante minimul vine de la o variantă fără stoc, deci nu anunțăm un preț de neatins.
+// O variantă selectată trebuie tarifată exact. Fără selecție, calculul este posibil
+// doar când toate variantele au același preț cunoscut; altfel cerem variant_id.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Rândul real al produsului, cu variantele îmbricate cum le întoarce PostgREST. */
@@ -433,7 +433,7 @@ test('🔴 coșul care DEPĂȘEȘTE pragul nu mai e anunțat ca sub prag', async
   assert.doesNotMatch(result.content[0].text, /pentru transport gratuit/)
 })
 
-test('variante la prețuri diferite: se ia MINIMUL, nu maximul și nu media', async () => {
+test('variante la prețuri diferite fără selecție: cere variant_id', async () => {
   const { result } = await run(
     { lines: [{ slug: 'p', quantity: 10 }] },
     {
@@ -446,17 +446,16 @@ test('variante la prețuri diferite: se ia MINIMUL, nu maximul și nu media', as
       ],
     },
   )
-  assert.equal(structured(result).subtotal, 39.7, '10 × 3.97 — subestimare, nu supraestimare')
+  assert.equal(result.isError, true)
+  assert.equal(result.structuredContent, undefined)
+  assert.match(result.content[0].text, /variant_id/)
 })
 
 test('preț de bază NENUL + variante: se taxează varianta, nu prețul de bază', async () => {
-  // 🔴 Găsit prin testare de mutație: ștergerea lui `variant_count` din `withVariantPricing` nu
-  // pica niciun test, fiindcă toate fixture-urile aveau `price: 0` — acolo ramura se intră oricum
-  // prin `bazaLipsa`. La un produs cu preț de bază nenul ȘI variante, `variant_count` e SINGURA
-  // cale de intrare, iar fără el subtotalul ar folosi prețul de bază: bani, nu etichetă.
+  // Varianta aleasă prevalează chiar dacă produsul are și un preț de bază nenul.
   const { result } = await run(
-    { lines: [{ slug: 'p', quantity: 3 }] },
-    { rows: [{ ...RAND_CU_VARIANTE, slug: 'p', price: 100, product_variants: [{ price: 42 }, { price: 90 }] }] },
+    { lines: [{ slug: 'p', variant_id: 12, quantity: 3 }] },
+    { rows: [{ ...RAND_CU_VARIANTE, slug: 'p', price: 100, product_variants: [{ id: 12, price: 42 }, { id: 13, price: 90 }] }] },
   )
   assert.equal(structured(result).subtotal, 126, '3 × 42 (varianta), nu 3 × 100 (prețul de bază)')
 })
@@ -482,21 +481,17 @@ test('CONTROL: variante fără preț valid nu fabrică un subtotal', async () =>
     { lines: [{ slug: 'p', quantity: 3 }] },
     { rows: [{ ...RAND_CU_VARIANTE, slug: 'p', product_variants: [{ price: 0 }, { price: null }] }] },
   )
-  assert.equal(structured(result).subtotal, 0, 'fără preț cunoscut nu inventăm unul')
+  assert.equal(result.isError, true)
+  assert.equal(result.structuredContent, undefined)
 })
 
-test('o variantă cu preț 0 amestecată cu una validă NU trage minimul la 0', async () => {
-  // 🔴 Găsit de verificatorul adversarial prin mutația `p > 0` → `p >= 0`, care rămânea verde pe
-  // toate cele 253 de teste. Singurul test cu „variante fără preț valid" le are pe AMBELE
-  // invalide, deci nu discriminează: și codul corect, și mutantul dau 0 acolo. Cazul care
-  // discriminează e AMESTECUL — o variantă cu preț 0 lângă una reală. Cu mutantul, minimul devine
-  // 0 și subtotalul unui coș de 57 RON iese 0: exact regresia „preț 0" de la care a pornit tot
-  // fixul, reintrodusă pe altă coloană.
-  const { result } = await run(
-    { lines: [{ slug: 'p', quantity: 10 }] },
-    { rows: [{ ...RAND_CU_VARIANTE, slug: 'p', product_variants: [{ price: 0 }, { price: 5.7 }] }] },
-  )
-  assert.equal(structured(result).subtotal, 57, '10 × 5.70 — varianta cu preț 0 nu e un preț')
+test('o variantă fără preț lângă una validă necesită selecție explicită', async () => {
+  const rows = [{ ...RAND_CU_VARIANTE, slug: 'p', product_variants: [{ id: 1, price: 0 }, { id: 2, price: 5.7 }] }]
+  const ambiguous = await run({ lines: [{ slug: 'p', quantity: 10 }] }, { rows })
+  assert.equal(ambiguous.result.isError, true)
+  assert.equal(ambiguous.result.structuredContent, undefined)
+  const chosen = await run({ lines: [{ slug: 'p', variant_id: 2, quantity: 10 }] }, { rows })
+  assert.equal(structured(chosen.result).subtotal, 57)
 })
 
 test('produsul EXCLUS din canal nu-și scurge prețul prin calculate_shipping', async () => {
@@ -509,7 +504,8 @@ test('produsul EXCLUS din canal nu-și scurge prețul prin calculate_shipping', 
     { lines: [{ product_id: exclus.id, quantity: 4 }] },
     { rows: [{ ...RAND_CU_VARIANTE, id: exclus.id, slug: 'anestezic', price: 120, product_variants: [] }] },
   )
-  assert.equal(structured(result).subtotal, 0, `${exclus.name} trebuie tratat ca produs necunoscut`)
+  assert.equal(result.isError, true, `${exclus.name} trebuie tratat ca produs necunoscut`)
+  assert.equal(result.structuredContent, undefined)
 })
 
 test('CONTROL: taxa de colet greu supraviețuiește schimbării de interogare', async () => {
@@ -527,7 +523,7 @@ test('interogarea cere efectiv variantele — altfel fixul n-ar avea de unde șt
     { rows: [RAND_CU_VARIANTE] },
   )
   const url = decodeURIComponent(calls[0].url)
-  assert.match(url, /product_variants\(/, 'select-ul trebuie să îmbrice variantele')
+  assert.match(url, /product_variants\(id,price,sale_price\)/, 'select-ul trebuie să identifice și să tarifeze varianta aleasă')
   assert.match(url, /shipping_override/, 'coloanele vechi rămân — taxa de colet greu nu se pierde')
   assert.equal(calls.length, 1, 'o singură cerere de rețea, nu una în plus pentru variante')
 })
@@ -575,9 +571,9 @@ test('linie NEREZOLVATĂ nu pune avertismentul pe un coș în care produsul n-a 
   // CONTRIBUIT": catalogul întoarce produsul HU, dar linia cerută e alt slug, deci
   // produsul nu ajunge în coș — nici subtotal, nici avertisment.
   const { result } = await run({ lines: [{ slug: 'alt-slug-nepotrivit', quantity: 1 }] }, { rows: [HU_ROW] })
-  const out = structured(result)
-  assert.equal(out.subtotal, 0, 'linia nerezolvată nu contribuie')
-  assert.equal(out.order_restriction, null, 'avertisment pe un produs care nu e în coș')
+  assert.equal(result.isError, true)
+  assert.equal(result.structuredContent, undefined)
+  assert.doesNotMatch(result.content[0].text, /Ungaria/)
 })
 
 test('ramura cu `subtotal` dat de apelant: restricția e null, nu inventată', async () => {
@@ -586,4 +582,78 @@ test('ramura cu `subtotal` dat de apelant: restricția e null, nu inventată', a
   const { result, calls } = await run({ subtotal: 50 }, { rows: [HU_ROW] })
   assert.equal(calls.length, 0, 'ramura cu subtotal nu are voie să interogheze catalogul')
   assert.equal(structured(result).order_restriction, null)
+})
+
+// Regresii pentru totalul exact pe varianta aleasă, nu prețul minim de catalog.
+const VARIANT_ROWS = [{
+  id: 8387, slug: 'kwadron-rl', price: 0, shipping_override: null,
+  product_variants: [{ id: 574, price: 6.47 }, { id: 596, price: 8.27 }],
+}]
+
+test('varianta aleasă schimbă corect pragul transportului gratuit', async () => {
+  const cheap = await run({ lines: [{ slug: 'kwadron-rl', variant_id: 574, quantity: 40 }] }, { rows: VARIANT_ROWS })
+  assert.equal(structured(cheap.result).subtotal, 258.8)
+  assert.equal(structured(cheap.result).shipping_fee, SHIP_FEE)
+  const chosen = await run({ lines: [{ product_id: 8387, variant_id: 596, quantity: 40 }] }, { rows: VARIANT_ROWS })
+  assert.equal(structured(chosen.result).subtotal, 330.8)
+  assert.equal(structured(chosen.result).free_shipping, true)
+  assert.equal(chosen.calls.length, 1)
+})
+
+test('liniile aceluiași produs păstrează fiecare varianta, cantitatea și reducerea sa', async () => {
+  const { result } = await run(
+    { lines: [{ product_id: 8387, variant_id: 574, quantity: 2 }, { product_id: 8387, variant_id: 596, quantity: 3 }] },
+    { rows: [{ ...VARIANT_ROWS[0], product_variants: [{ id: 574, price: 10 }, { id: 596, price: 20, sale_price: 12 }] }] },
+  )
+  assert.equal(structured(result).subtotal, 56)
+})
+
+test('variantă străină sau inexistentă: niciun subtotal din restul coșului', async () => {
+  const { result } = await run(
+    { lines: [{ product_id: 8387, variant_id: 574, quantity: 2 }, { product_id: 8387, variant_id: 999, quantity: 1 }] },
+    { rows: VARIANT_ROWS },
+  )
+  assert.equal(result.isError, true)
+  assert.equal(result.structuredContent, undefined)
+  assert.match(result.content[0].text, /nu aparține/)
+})
+
+test('produs simplu nu acceptă un ID de variantă al altui produs', async () => {
+  const { result } = await run(
+    { lines: [{ product_id: 101, variant_id: 596, quantity: 1 }] },
+    { rows: [{ id: 101, slug: 'simplu', price: 10, product_variants: [] }, ...VARIANT_ROWS] },
+  )
+  assert.equal(result.isError, true)
+  assert.equal(result.structuredContent, undefined)
+})
+
+test('produs necunoscut într-un coș mixt nu este omis din total', async () => {
+  const { result } = await run(
+    { lines: [{ product_id: 8387, variant_id: 596, quantity: 40 }, { slug: 'necunoscut', quantity: 1 }] },
+    { rows: VARIANT_ROWS },
+  )
+  assert.equal(result.isError, true)
+  assert.equal(result.structuredContent, undefined)
+  assert.doesNotMatch(result.content[0].text, /Transport gratuit/)
+})
+
+test('preț indisponibil pe produs sau varianta selectată: fără total inventat', async () => {
+  for (const fixture of [
+    { row: { id: 101, slug: 'simplu', price: null }, variant: undefined },
+    { row: { ...VARIANT_ROWS[0], product_variants: [{ id: 596, price: null }] }, variant: 596 },
+  ]) {
+    const { result } = await run(
+      { lines: [{ product_id: fixture.row.id, variant_id: fixture.variant, quantity: 1 }] },
+      { rows: [fixture.row] },
+    )
+    assert.equal(result.isError, true)
+    assert.equal(result.structuredContent, undefined)
+  }
+})
+
+test('variant_id este opțional, dar trebuie să fie un întreg pozitiv', () => {
+  for (const variant_id of [0, -1, 1.5, '596']) {
+    assert.equal(inputSchema.safeParse({ lines: [{ product_id: 8387, variant_id, quantity: 1 }] }).success, false)
+  }
+  assert.equal(inputSchema.parse({ lines: [{ product_id: 8387, variant_id: 596, quantity: 1 }] }).lines?.[0].variant_id, 596)
 })
